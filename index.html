@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>2D Projectile Motion</title>
+    <!-- Load Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            overflow: hidden; /* Prevent scrolling */
+        }
+        /* Custom slider styles for better look */
+        input[type="range"] {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 100%;
+            height: 8px;
+            border-radius: 4px;
+            background: #374151; /* gray-700 */
+            outline: none;
+            opacity: 0.9;
+            -webkit-transition: .2s;
+            transition: opacity .2s;
+        }
+        input[type="range"]:hover {
+            opacity: 1;
+        }
+        input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #3b82f6; /* blue-500 */
+            cursor: pointer;
+        }
+        input[type="range"]::-moz-range-thumb {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: #3b82f6; /* blue-500 */
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white flex flex-col h-screen">
+
+    <h1 class="text-3xl font-bold text-center py-4 text-blue-400">2D Projectile Motion Simulator</h1>
+
+    <div class="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-4 p-4 h-full overflow-hidden">
+
+        <!-- Controls Panel -->
+        <div class="lg:col-span-1 bg-gray-800 p-6 rounded-xl shadow-lg flex flex-col space-y-6 overflow-y-auto">
+            
+            <!-- Initial Velocity -->
+            <div>
+                <label for="velocity" class="block text-sm font-medium text-gray-300">Initial Velocity (<span id="velocity-value">50</span> m/s)</label>
+                <input type="range" id="velocity" min="1" max="100" value="50" class="w-full mt-2 accent-blue-500">
+            </div>
+
+            <!-- Launch Angle -->
+            <div>
+                <label for="angle" class="block text-sm font-medium text-gray-300">Launch Angle (<span id="angle-value">45</span> °)</label>
+                <input type="range" id="angle" min="0" max="90" value="45" class="w-full mt-2 accent-blue-500">
+            </div>
+
+            <!-- Initial Height -->
+            <div>
+                <label for="height" class="block text-sm font-medium text-gray-300">Initial Height (<span id="height-value">0</span> m)</label>
+                <input type="range" id="height" min="0" max="200" value="0" class="w-full mt-2 accent-blue-500">
+            </div>
+            
+            <!-- Gravity Info -->
+            <div class="text-center text-gray-400 pt-4 border-t border-gray-700">
+                Gravity (g) = 9.81 m/s²
+            </div>
+
+            <!-- Buttons -->
+            <div class="flex space-x-4 pt-4">
+                <button id="launch-btn" class="flex-1 bg-green-600 hover:bg-green-700 text-white font-bold py-3 px-4 rounded-lg transition duration-200 shadow-md">
+                    Launch
+                </button>
+                <button id="reset-btn" class="flex-1 bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-4 rounded-lg transition duration-200 shadow-md">
+                    Reset
+                </button>
+            </div>
+        </div>
+
+        <!-- Simulation Canvas -->
+        <div class="lg:col-span-3 bg-gray-800 rounded-xl shadow-lg overflow-hidden relative h-[calc(100vh-150px)] lg:h-auto">
+            <canvas id="sim-canvas" class="bg-gray-900 border-4 border-gray-700 rounded-lg"></canvas>
+            <!-- Legend -->
+            <div class="absolute bottom-4 left-4 text-xs bg-gray-900 bg-opacity-70 p-2 rounded">
+                <div class="flex items-center"><span class="w-3 h-0.5 bg-green-500 mr-2"></span> Horizontal Velocity ($v_x$)</div>
+                <div class="flex items-center"><span class="w-3 h-0.5 bg-orange-500 mr-2"></span> Vertical Velocity ($v_y$)</div>
+                <div class="flex items-center"><span class="w-3 h-0.5 bg-white mr-2"></span> Resultant Velocity ($v$)</div>
+                <div class="flex items-center"><span class="w-3 h-0.5 bg-cyan-400 mr-2"></span> Trajectory</div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        window.onload = function() {
+            // --- CONSTANTS & STATE ---
+            const G = 9.81; // m/s^2
+            let scale = 3; // pixels per meter
+            let simState = 'idle'; // 'idle', 'running', 'landed'
+            let time = 0; // simulation time in seconds
+            let lastTimestamp = 0; // for calculating dt
+
+            let projectile = {
+                x: 0, y: 0, // current position (meters)
+                v0: 50,     // initial speed (m/s)
+                vx: 0,      // initial x-velocity (m/s)
+                vy: 0,      // initial y-velocity (m/s)
+                h0: 0,      // initial height (m)
+                angle: 45,  // angle in degrees
+                path: []    // array of {x, y} points
+            };
+
+            // --- CANVAS & CONTEXT ---
+            const canvas = document.getElementById('sim-canvas');
+            const ctx = canvas.getContext('2d');
+            let originX, originY; // Pixel coordinates of (0,0) meters
+
+            // --- DOM ELEMENTS ---
+            const velocitySlider = document.getElementById('velocity');
+            const velocityValue = document.getElementById('velocity-value');
+            const angleSlider = document.getElementById('angle');
+            const angleValue = document.getElementById('angle-value');
+            const heightSlider = document.getElementById('height');
+            const heightValue = document.getElementById('height-value');
+            const launchBtn = document.getElementById('launch-btn');
+            const resetBtn = document.getElementById('reset-btn');
+
+            // --- COORDINATE TRANSFORMATION ---
+            // Convert physics coordinates (meters) to canvas coordinates (pixels)
+            function tx(x_m) {
+                return originX + (x_m * scale);
+            }
+            // Convert physics coordinates (meters) to canvas coordinates (pixels)
+            function ty(y_m) {
+                return originY - (y_m * scale);
+            }
+
+            // --- DRAWING HELPERS ---
+            function drawArrow(fromX, fromY, toX, toY, color) {
+                ctx.strokeStyle = color;
+                ctx.fillStyle = color;
+                ctx.lineWidth = 2;
+                
+                const headLen = 8; // length of head in pixels
+                const dx = toX - fromX;
+                const dy = toY - fromY;
+                const angle = Math.atan2(dy, dx);
+                
+                ctx.beginPath();
+                ctx.moveTo(fromX, fromY);
+                ctx.lineTo(toX, toY);
+                ctx.stroke();
+                
+                // Draw arrowhead
+                ctx.beginPath();
+                ctx.moveTo(toX, toY);
+                ctx.lineTo(toX - headLen * Math.cos(angle - Math.PI / 6), toY - headLen * Math.sin(angle - Math.PI / 6));
+                ctx.lineTo(toX - headLen * Math.cos(angle + Math.PI / 6), toY - headLen * Math.sin(angle + Math.PI / 6));
+                ctx.closePath();
+                ctx.fill();
+            }
+
+            function drawGrid() {
+                ctx.strokeStyle = '#4b5563'; // gray-600
+                ctx.lineWidth = 0.5;
+
+                const step = 50; // grid every 50 meters, scaled
+                const pixStep = step * scale;
+
+                // Vertical lines
+                for (let x = pixStep; tx(x / scale) < canvas.width; x += pixStep) {
+                    ctx.beginPath();
+                    ctx.moveTo(originX + x, 0);
+                    ctx.lineTo(originX + x, canvas.height);
+                    ctx.stroke();
+                }
+                // Horizontal lines
+                for (let y = pixStep; ty(y / scale) > 0; y += pixStep) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, originY - y);
+                    ctx.lineTo(canvas.width, originY - y);
+                    ctx.stroke();
+                }
+            }
+            
+            function drawAxes() {
+                ctx.strokeStyle = '#9ca3af'; // gray-400
+                ctx.lineWidth = 1;
+
+                // Y-Axis
+                ctx.beginPath();
+                ctx.moveTo(originX, 0);
+                ctx.lineTo(originX, canvas.height);
+                ctx.stroke();
+
+                // X-Axis (Ground)
+                ctx.beginPath();
+                ctx.moveTo(0, originY);
+                ctx.lineTo(canvas.width, originY);
+                ctx.stroke();
+            }
+            
+            // --- SIMULATION LOGIC ---
+            function resetSimulation() {
+                simState = 'idle';
+                time = 0;
+                lastTimestamp = 0;
+
+                // Get values from sliders
+                projectile.v0 = parseFloat(velocitySlider.value);
+                projectile.angle = parseFloat(angleSlider.value);
+                projectile.h0 = parseFloat(heightSlider.value);
+                
+                // Update UI values
+                velocityValue.textContent = projectile.v0;
+                angleValue.textContent = projectile.angle;
+                heightValue.textContent = projectile.h0;
+                
+                // Calculate initial velocities
+                const angleRad = projectile.angle * Math.PI / 180;
+                projectile.vx = projectile.v0 * Math.cos(angleRad);
+                projectile.vy = projectile.v0 * Math.sin(angleRad);
+                
+                // Set initial position
+                projectile.x = 0;
+                projectile.y = projectile.h0;
+                projectile.path = [{ x: 0, y: projectile.h0 }];
+
+                launchBtn.disabled = false;
+                launchBtn.textContent = 'Launch';
+                
+                // No need to call gameLoop, it's already running.
+                // We just call draw() once to show the initial state.
+                draw();
+            }
+            
+            function launch() {
+                if (simState === 'running') return;
+                
+                // Reset first to capture current slider values
+                resetSimulation(); 
+                
+                simState = 'running';
+                lastTimestamp = performance.now();
+                launchBtn.disabled = true;
+                launchBtn.textContent = 'Running...';
+            }
+
+            function updatePhysics(dt) {
+                if (simState !== 'running' || !dt) return;
+
+                time += dt;
+
+                // Calculate new position using kinematic equations
+                projectile.x = projectile.vx * time;
+                projectile.y = projectile.h0 + (projectile.vy * time) - (0.5 * G * time * time);
+
+                projectile.path.push({ x: projectile.x, y: projectile.y });
+
+                // Check for landing
+                if (projectile.y < 0) {
+                    projectile.y = 0;
+                    simState = 'landed';
+                    launchBtn.disabled = false;
+                    launchBtn.textContent = 'Launch';
+                }
+            }
+
+            function draw() {
+                // Clear canvas
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                
+                // Draw grid and axes
+                drawGrid();
+                drawAxes();
+
+                // --- 1. Draw Trajectory Path ---
+                if (projectile.path.length > 1) {
+                    ctx.beginPath();
+                    ctx.moveTo(tx(projectile.path[0].x), ty(projectile.path[0].y));
+                    for (let i = 1; i < projectile.path.length; i++) {
+                        ctx.lineTo(tx(projectile.path[i].x), ty(projectile.path[i].y));
+                    }
+                    ctx.strokeStyle = '#22d3ee'; // cyan-400
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                }
+
+                // --- 2. Draw Projectile ---
+                const px = tx(projectile.x); // projectile's canvas x
+                const py = ty(projectile.y); // projectile's canvas y
+                
+                ctx.beginPath();
+                ctx.arc(px, py, 6, 0, 2 * Math.PI);
+                ctx.fillStyle = '#ef4444'; // red-500
+                ctx.fill();
+                ctx.strokeStyle = '#f87171'; // red-400
+                ctx.lineWidth = 1;
+                ctx.stroke();
+
+                // --- 3. Draw Velocity Vectors (Decomposition) ---
+                if (simState === 'idle' || simState === 'running' || simState === 'landed') {
+                    let current_vx = projectile.vx;
+                    let current_vy;
+                    
+                    if (simState === 'idle') {
+                        current_vy = projectile.vy;
+                    } else {
+                        current_vy = projectile.vy - G * time; // v_y = v_y0 - g*t
+                    }
+                    
+                    const v_scale = 2.5; // vector length scale (pixels per m/s)
+                    const vx_len = current_vx * v_scale;
+                    const vy_len = current_vy * v_scale;
+                    
+                    // Draw Horizontal component (green)
+                    drawArrow(px, py, px + vx_len, py, '#22c55e'); // green-500
+                    
+                    // Draw Vertical component (orange)
+                    drawArrow(px, py, px, py - vy_len, '#f97316'); // orange-500
+                    
+                    // Draw Resultant vector (white)
+                    drawArrow(px, py, px + vx_len, py - vy_len, '#ffffff');
+                }
+            }
+
+            function gameLoop(timestamp) {
+                const dt = (timestamp - lastTimestamp) / 1000; // delta time in seconds
+                
+                if (simState === 'running') {
+                    updatePhysics(dt);
+                    lastTimestamp = timestamp;
+                }
+                
+                draw();
+                
+                requestAnimationFrame(gameLoop);
+            }
+            
+            // --- RESIZE & INITIALIZATION ---
+            function resizeCanvas() {
+                const parent = canvas.parentElement;
+                canvas.width = parent.clientWidth;
+                canvas.height = parent.clientHeight;
+                
+                // Set origin (bottom-left, with padding)
+                originX = 50;
+                originY = canvas.height - 50;
+
+                // Redraw on resize
+                draw();
+            }
+            
+            function init() {
+                // Set up event listeners
+                velocitySlider.addEventListener('input', resetSimulation);
+                angleSlider.addEventListener('input', resetSimulation);
+                heightSlider.addEventListener('input', resetSimulation);
+                
+                launchBtn.addEventListener('click', launch);
+                resetBtn.addEventListener('click', resetSimulation);
+                
+                window.addEventListener('resize', resizeCanvas);
+                
+                // Initial setup
+                resizeCanvas();
+                resetSimulation();
+                
+                // Start the loop
+                requestAnimationFrame(gameLoop);
+            }
+            
+            init();
+        };
+    </script>
+</body>
+</html>
